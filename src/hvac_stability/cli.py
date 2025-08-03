@@ -1,4 +1,6 @@
+import base64
 import json
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -24,6 +26,49 @@ class Config:
     @property
     def devices_file(self) -> Path:
         return Path(self.data_path).expanduser() / "devices.json"
+    
+    @property
+    def credentials_file(self) -> Path:
+        return Path(self.data_path).expanduser() / ".credentials"
+
+    def load_stored_credentials(self) -> tuple[str | None, str | None]:
+        """Load stored credentials from the credentials file."""
+        creds_file = self.credentials_file
+        if not creds_file.exists():
+            return None, None
+        
+        try:
+            with open(creds_file, "r") as f:
+                encoded_data = f.read().strip()
+            
+            decoded_data = base64.b64decode(encoded_data).decode("utf-8")
+            creds = json.loads(decoded_data)
+            return creds.get("username"), creds.get("password")
+        except (json.JSONDecodeError, Exception):
+            return None, None
+
+    def store_credentials(self, username: str, password: str) -> None:
+        """Store credentials securely in the credentials file."""
+        creds_file = self.credentials_file
+        creds_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        creds_data = {"username": username, "password": password}
+        encoded_data = base64.b64encode(json.dumps(creds_data).encode("utf-8")).decode("utf-8")
+        
+        with open(creds_file, "w") as f:
+            f.write(encoded_data)
+        
+        # Set restrictive permissions (owner read/write only)
+        os.chmod(creds_file, 0o600)
+
+    def get_auth_credentials(self) -> tuple[str | None, str | None]:
+        """Get auth credentials from environment variables or stored file."""
+        # First try environment variables
+        if self.auth_username and self.auth_password:
+            return self.auth_username, self.auth_password
+        
+        # Fall back to stored credentials
+        return self.load_stored_credentials()
 
 
 app_config = environ.to_config(Config)
@@ -36,6 +81,22 @@ class HVACManager:
 
     devices: list[PyKumo] = []
     local_device_config: dict[str, dict] = {}
+
+    @classmethod
+    def create_with_auth(cls, config: Config) -> "HVACManager":
+        """Create HVACManager with authentication from stored credentials."""
+        username, password = config.get_auth_credentials()
+        
+        if not username or not password:
+            secho("No credentials found. Please run 'hvac-stability login' first.", fg="red")
+            raise typer.Exit(1)
+        
+        try:
+            connection = KumoCloudAccount.Factory(username, password)
+            return cls(config=config, connection=connection)
+        except Exception as e:
+            secho(f"Authentication failed: {e}", fg="red")
+            raise typer.Exit(1)
 
     def load_devices(self):
         for device in self.connection.get_indoor_units():
@@ -58,18 +119,46 @@ class HVACManager:
 @app.command()
 def login(
     username: Annotated[str, typer.Argument()] = None,
+    password: Annotated[str, typer.Option("--password", "-p", prompt=True, hide_input=True)] = None,
 ):
-    """Login to the Kumo API."""
-    username = username or app_config.auth_username
-    password = app_config.auth_password
-    pykumo.KumoCloudAccount.Factory(username, password)
+    """Login to the Kumo API and store credentials securely."""
+    # Get username from argument, stored creds, or environment
+    if not username:
+        stored_username, _ = app_config.load_stored_credentials()
+        username = username or stored_username or app_config.auth_username
+    
+    if not username:
+        username = typer.prompt("Username")
+    
+    # Get password from option, stored creds, or environment
+    if not password:
+        _, stored_password = app_config.load_stored_credentials()
+        password = password or stored_password or app_config.auth_password
+    
+    if not password:
+        password = typer.prompt("Password", hide_input=True)
+
+    try:
+        # Test the credentials
+        account = KumoCloudAccount.Factory(username, password)
+        secho("Login successful!", fg="green")
+        
+        # Store credentials on successful login
+        app_config.store_credentials(username, password)
+        secho("Credentials stored securely.", fg="green")
+        
+    except Exception as e:
+        secho(f"Login failed: {e}", fg="red")
+        raise typer.Exit(1)
 
 
 @app.command()
 def list():
     """List all devices."""
+    username, password = app_config.get_auth_credentials()
+    
     if not username or not password:
-        secho("Username and password are required.", fg="red")
+        secho("No credentials found. Please run 'hvac-stability login' first.", fg="red")
         raise typer.Exit(1)
 
     try:
