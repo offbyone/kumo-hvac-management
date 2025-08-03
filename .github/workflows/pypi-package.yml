@@ -46,7 +46,7 @@ jobs:
       id-token: write
     name: Publish in-dev package to test.pypi.org
     environment: release-test-pypi
-    if: github.repository_owner == 'WorldconVotingSystems' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.repository_owner == 'offbyone' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: build-package
 
@@ -69,7 +69,7 @@ jobs:
       id-token: write
     name: Publish released package to pypi.org
     environment: release-pypi
-    if: github.repository_owner == 'WorldconVotingSystems' && github.event.action == 'published'
+    if: github.repository_owner == 'offbyone' && github.event.action == 'published'
     runs-on: ubuntu-latest
     needs: build-package
 
@@ -83,14 +83,15 @@ jobs:
       - name: Upload package to PyPI
         uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
 
-      - name: Notify me
-        uses: umahmood/pushover-actions@5da31193f672e7418804bdb51836bdf20f393c8f # v1.1.0
-        env:
-          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_API_KEY }}
-          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER_KEY }}
-        with:
-          status: ${{ job.status }}
-          title: NomNom published to PyPi
-          message: |-
-            NomNom version ${{ needs.build-package.outputs.package_version }} published
-          url: https://pypi.org/project/nomnom-hugoawards/
+
+      # - name: Notify me
+      #   uses: umahmood/pushover-actions@5da31193f672e7418804bdb51836bdf20f393c8f # v1.1.0
+      #   env:
+      #     PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_API_KEY }}
+      #     PUSHOVER_USER: ${{ secrets.PUSHOVER_USER_KEY }}
+      #   with:
+      #     status: ${{ job.status }}
+      #     title:  published to PyPi
+      #     message: |-
+      #       NomNom version ${{ needs.build-package.outputs.package_version }} published
+      #     url: https://pypi.org/project/nomnom-hugoawards/
