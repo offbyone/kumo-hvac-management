@@ -23,3 +23,4 @@
 - Main CLI entry point: `src/hvac_stability/cli.py`
 - This is a Python CLI tool for HVAC device management using the Kumo cloud API
 - Uses jujutsu (jj) for version control - commit changes with `jj commit -m "message"`
+- .venv/ contains all the local copies of the dependencies; use that when determining what a library is capable of.
