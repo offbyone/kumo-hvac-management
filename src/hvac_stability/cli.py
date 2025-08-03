@@ -12,6 +12,7 @@ from attrs import define
 from click import secho
 from environ import config, var
 from pykumo import KumoCloudAccount, PyKumo
+from pykumo.schedule import UnitSchedule
 from rich import print
 from rich.console import Console
 from rich.panel import Panel
@@ -142,6 +143,22 @@ class HVACManager:
 
         self._load_local_config()
         self._merge_device_config()
+        
+    def enable_scheduling_for_device(self, device: PyKumo) -> PyKumo:
+        """Create a new PyKumo instance with scheduling enabled for the given device."""
+        import base64
+        
+        # Create new PyKumo instance with scheduling enabled
+        schedule_device = PyKumo(
+            name=device.get_name(),
+            addr=device._address,
+            cfg_json={
+                "password": base64.b64encode(device._security["password"]).decode("utf-8"),
+                "crypto_serial": device._security["crypto_serial"].hex()
+            },
+            use_schedule=True
+        )
+        return schedule_device
 
     def _load_local_config(self):
         """Load local device configuration from file."""
@@ -420,6 +437,138 @@ def store_device_ip(
     console.print(
         f"[green]✓ IP address {ip_address} stored for device '{device_name}' ({device_serial})[/green]"
     )
+
+
+@app.command()
+def show_schedule(
+    device_identifier: Annotated[
+        str, typer.Argument(help="Device serial number or name")
+    ] = None,
+):
+    """Show the current schedule for a device."""
+    manager = HVACManager.create_with_auth(app_config)
+    manager.load_devices()
+
+    # If no device specified, show available devices
+    if not device_identifier:
+        console.print("[yellow]Available devices:[/yellow]")
+        devices = manager.list_devices_simple()
+
+        if not devices:
+            console.print("[red]No devices found.[/red]")
+            raise typer.Exit(1)
+
+        table = Table(show_header=True, header_style="bold blue")
+        table.add_column("Index", style="cyan", justify="center")
+        table.add_column("Serial", style="green")
+        table.add_column("Name", style="yellow")
+
+        for i, (serial, name) in enumerate(devices, 1):
+            table.add_row(str(i), serial, name)
+
+        console.print(table)
+
+        # Get user selection
+        choice = typer.prompt("Select device by index or enter serial/name")
+
+        # Try to parse as index first
+        try:
+            index = int(choice) - 1
+            if 0 <= index < len(devices):
+                device_identifier = devices[index][0]  # Use serial
+            else:
+                console.print("[red]Invalid index.[/red]")
+                raise typer.Exit(1)
+        except ValueError:
+            # Not an index, use as identifier
+            device_identifier = choice
+
+    # Find the device
+    device = manager.get_device_by_serial(device_identifier)
+    if not device:
+        device = manager.get_device_by_name(device_identifier)
+
+    if not device:
+        console.print(f"[red]Device '{device_identifier}' not found.[/red]")
+        raise typer.Exit(1)
+
+    device_serial = device.get_serial()
+    device_name = device.get_name()
+
+    try:
+        console.print(f"\n[bold green]Schedule for {device_name} ({device_serial})[/bold green]")
+        
+        # Create a schedule-enabled version of the device
+        schedule_device = manager.enable_scheduling_for_device(device)
+        
+        # Get the schedule
+        unit_schedule = schedule_device.get_unit_schedule()
+        if unit_schedule is None:
+            console.print("[red]Schedule not available for this device.[/red]")
+            raise typer.Exit(1)
+            
+        unit_schedule.fetch()
+        
+        # Check if any schedule entries exist
+        if len(unit_schedule) == 0:
+            console.print("[yellow]No schedule entries found.[/yellow]")
+            return
+            
+        # Create table for schedule display
+        table = Table(title=f"Schedule for {device_name}", show_header=True, header_style="bold blue")
+        table.add_column("Slot", style="cyan", justify="center")
+        table.add_column("Active", style="green", justify="center")
+        table.add_column("Days", style="yellow", min_width=12)
+        table.add_column("Time", style="magenta", justify="center")
+        table.add_column("Mode", style="blue", justify="center")
+        table.add_column("Heat SP", style="red", justify="center")
+        table.add_column("Cool SP", style="cyan", justify="center")
+        table.add_column("Fan Speed", style="orange1", justify="center")
+        table.add_column("Vane Dir", style="dim", justify="center")
+
+        # Map day numbers to names for display
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        
+        for slot in sorted(unit_schedule.keys()):
+            event = unit_schedule[slot]
+            
+            # Format days
+            if event.scheduled_days:
+                days_str = ", ".join(day_names[day] for day in sorted(event.scheduled_days))
+            else:
+                days_str = "None"
+            
+            # Format active status
+            active_str = "✓" if event.active else "✗"
+            
+            # Format setpoints
+            heat_sp = f"{event.settings.set_point_heat}°F" if event.settings.set_point_heat is not None else "N/A"
+            cool_sp = f"{event.settings.set_point_cool}°F" if event.settings.set_point_cool is not None else "N/A"
+            
+            # Format time
+            time_str = event.scheduled_time.strftime("%H:%M") if event.scheduled_time else "N/A"
+            
+            table.add_row(
+                slot,
+                active_str,
+                days_str,
+                time_str,
+                str(event.settings.mode),
+                heat_sp,
+                cool_sp,
+                str(event.settings.fan_speed),
+                str(event.settings.vane_dir)
+            )
+        
+        console.print(table)
+        
+        # Show summary info
+        active_events = sum(1 for slot in unit_schedule if unit_schedule[slot].active)
+        console.print(f"\n[dim]Total slots: {len(unit_schedule)}, Active events: {active_events}[/dim]")
+        
+    except Exception as e:
+        console.print(f"[red]Error retrieving schedule: {e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
