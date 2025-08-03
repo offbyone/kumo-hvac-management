@@ -6,17 +6,12 @@ import datetime
 from pathlib import Path
 from typing import Annotated
 
-import environ
-import pykumo
 import typer
 from attrs import define
-from click import secho
 from environ import config, var
 from pykumo import KumoCloudAccount, PyKumo
 from pykumo.schedule import UnitSchedule
-from rich import print
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 
 app = typer.Typer()
@@ -28,19 +23,19 @@ logging.basicConfig(level=logging.ERROR)
 
 def celsius_to_fahrenheit(celsius: float) -> float:
     """Convert Celsius to Fahrenheit."""
-    return (celsius * 9/5) + 32
+    return (celsius * 9 / 5) + 32
 
 
 def fahrenheit_to_celsius(fahrenheit: float) -> float:
     """Convert Fahrenheit to Celsius."""
-    return (fahrenheit - 32) * 5/9
+    return (fahrenheit - 32) * 5 / 9
 
 
 def format_temperature(temp: float | None, unit: str) -> str:
     """Format temperature with proper unit and conversion."""
     if temp is None:
         return "N/A"
-    
+
     if unit.upper() == "F":
         # PyKumo returns Celsius, convert to Fahrenheit for display
         temp_display = celsius_to_fahrenheit(temp)
@@ -115,6 +110,7 @@ app_config = Config()
 @define
 class DeviceSettings:
     """Current device settings."""
+
     mode: str | None = None
     heat_setpoint: float | None = None
     cool_setpoint: float | None = None
@@ -130,7 +126,7 @@ class DeviceSettings:
             heat_setpoint=device.get_heat_setpoint(),
             cool_setpoint=device.get_cool_setpoint(),
             fan_speed=device.get_fan_speed(),
-            vane_direction=device.get_vane_direction()
+            vane_direction=device.get_vane_direction(),
         )
 
     @classmethod
@@ -141,26 +137,36 @@ class DeviceSettings:
             heat_setpoint=schedule_settings.set_point_heat,
             cool_setpoint=schedule_settings.set_point_cool,
             fan_speed=schedule_settings.fan_speed,
-            vane_direction=schedule_settings.vane_dir
+            vane_direction=schedule_settings.vane_dir,
         )
 
-    def compare_to(self, other: "DeviceSettings", config: "Config" = None) -> dict[str, tuple[str, str]]:
+    def compare_to(
+        self, other: "DeviceSettings", config: "Config" = None
+    ) -> dict[str, tuple[str, str]]:
         """Compare this settings object to another, returning differences with proper formatting."""
         differences = {}
-        
-        for field in ["mode", "heat_setpoint", "cool_setpoint", "fan_speed", "vane_direction"]:
+
+        for field in [
+            "mode",
+            "heat_setpoint",
+            "cool_setpoint",
+            "fan_speed",
+            "vane_direction",
+        ]:
             self_val = getattr(self, field)
             other_val = getattr(other, field)
-            
+
             # Special handling for mode - ignore auto/autoCool/autoHeat variations
             if field == "mode":
                 # Normalize auto modes for comparison
                 self_normalized = self._normalize_auto_mode(self_val)
                 other_normalized = self._normalize_auto_mode(other_val)
-                
+
                 if self_normalized != other_normalized:
-                    differences[field] = (str(self_val) if self_val is not None else "N/A", 
-                                        str(other_val) if other_val is not None else "N/A")
+                    differences[field] = (
+                        str(self_val) if self_val is not None else "N/A",
+                        str(other_val) if other_val is not None else "N/A",
+                    )
             elif field in ["heat_setpoint", "cool_setpoint"]:
                 # Format temperature values with proper units
                 if config:
@@ -170,19 +176,19 @@ class DeviceSettings:
                     # Fallback to raw values if no config provided
                     self_str = str(self_val) if self_val is not None else "N/A"
                     other_str = str(other_val) if other_val is not None else "N/A"
-                
+
                 if self_val != other_val:
                     differences[field] = (self_str, other_str)
             else:
                 # Handle None values and format for display
                 self_str = str(self_val) if self_val is not None else "N/A"
                 other_str = str(other_val) if other_val is not None else "N/A"
-                
+
                 if self_val != other_val:
                     differences[field] = (self_str, other_str)
-                
+
         return differences
-    
+
     def _normalize_auto_mode(self, mode: str | None) -> str | None:
         """Normalize auto mode variations (auto, autoCool, autoHeat) to 'auto' for comparison."""
         if mode is None:
@@ -196,19 +202,21 @@ class DeviceSettings:
 @define
 class ScheduleAnalyzer:
     """Analyzes device schedules to determine expected settings."""
-    
+
     @staticmethod
-    def get_expected_settings(unit_schedule: UnitSchedule, target_time: datetime.datetime = None) -> DeviceSettings | None:
+    def get_expected_settings(
+        unit_schedule: UnitSchedule, target_time: datetime.datetime = None
+    ) -> DeviceSettings | None:
         """Determine what settings should be active based on schedule and time."""
         if target_time is None:
             target_time = datetime.datetime.now()
-            
+
         current_day = target_time.weekday()  # Monday = 0
         current_time = target_time.time()
-        
+
         # Get active events and find applicable ones
         applicable_events = []
-        
+
         for slot in unit_schedule:
             event = unit_schedule[slot]
             if event.active and event.in_use:
@@ -217,7 +225,7 @@ class ScheduleAnalyzer:
                     if event.scheduled_time <= current_time:
                         # This event has already triggered today
                         applicable_events.append((event.scheduled_time, slot, event))
-        
+
         # If no events today, check yesterday for late events that might still apply
         if not applicable_events:
             yesterday = (target_time - datetime.timedelta(days=1)).weekday()
@@ -227,12 +235,14 @@ class ScheduleAnalyzer:
                     if yesterday in event.scheduled_days:
                         # Event from yesterday might still be active
                         applicable_events.append((event.scheduled_time, slot, event))
-        
+
         if applicable_events:
             # Get the most recent event that should be active
-            latest_time, latest_slot, latest_event = max(applicable_events, key=lambda x: x[0])
+            latest_time, latest_slot, latest_event = max(
+                applicable_events, key=lambda x: x[0]
+            )
             return DeviceSettings.from_schedule_settings(latest_event.settings)
-        
+
         return None
 
 
@@ -270,20 +280,22 @@ class HVACManager:
 
         self._load_local_config()
         self._merge_device_config()
-        
+
     def enable_scheduling_for_device(self, device: PyKumo) -> PyKumo:
         """Create a new PyKumo instance with scheduling enabled for the given device."""
         import base64
-        
+
         # Create new PyKumo instance with scheduling enabled
         schedule_device = PyKumo(
             name=device.get_name(),
             addr=device._address,
             cfg_json={
-                "password": base64.b64encode(device._security["password"]).decode("utf-8"),
-                "crypto_serial": device._security["crypto_serial"].hex()
+                "password": base64.b64encode(device._security["password"]).decode(
+                    "utf-8"
+                ),
+                "crypto_serial": device._security["crypto_serial"].hex(),
             },
-            use_schedule=True
+            use_schedule=True,
         )
         return schedule_device
 
@@ -385,7 +397,7 @@ def login(
 
     try:
         # Test the credentials
-        account = KumoCloudAccount.Factory(username, password)
+        KumoCloudAccount.Factory(username, password)
         console.print("✓ Login successful!", style="bold green")
 
         # Store credentials on successful login
@@ -437,7 +449,7 @@ def list(
                     device.update_status()
                     temp = device.get_current_temperature()
                     temp_str = f"{temp}°F" if temp is not None else "N/A"
-                except:
+                except Exception:
                     temp_str = "N/A"
 
                 # Get mode and fan speed
@@ -447,7 +459,7 @@ def list(
                     status = device.get_runstate() or "N/A"
                     wifi_rssi = device.get_wifi_rssi()
                     wifi_str = f"{wifi_rssi}dBm" if wifi_rssi is not None else "N/A"
-                except:
+                except Exception:
                     mode = fan_speed = status = wifi_str = "N/A"
 
                 # Get stored IP address
@@ -467,7 +479,7 @@ def list(
                     wifi_str,
                     ip_address,
                 )
-            except Exception as e:
+            except Exception:
                 # Fallback for devices that fail to provide info
                 table.add_row(
                     device.get_name() if hasattr(device, "get_name") else "Unknown",
@@ -623,26 +635,32 @@ def show_schedule(
     device_name = device.get_name()
 
     try:
-        console.print(f"\n[bold green]Schedule for {device_name} ({device_serial})[/bold green]")
-        
+        console.print(
+            f"\n[bold green]Schedule for {device_name} ({device_serial})[/bold green]"
+        )
+
         # Create a schedule-enabled version of the device
         schedule_device = manager.enable_scheduling_for_device(device)
-        
+
         # Get the schedule
         unit_schedule = schedule_device.get_unit_schedule()
         if unit_schedule is None:
             console.print("[red]Schedule not available for this device.[/red]")
             raise typer.Exit(1)
-            
+
         unit_schedule.fetch()
-        
+
         # Check if any schedule entries exist
         if len(unit_schedule) == 0:
             console.print("[yellow]No schedule entries found.[/yellow]")
             return
-            
+
         # Create table for schedule display
-        table = Table(title=f"Schedule for {device_name}", show_header=True, header_style="bold blue")
+        table = Table(
+            title=f"Schedule for {device_name}",
+            show_header=True,
+            header_style="bold blue",
+        )
         table.add_column("Slot", style="cyan", justify="center")
         table.add_column("Active", style="green", justify="center")
         table.add_column("Days", style="yellow", min_width=12)
@@ -655,26 +673,40 @@ def show_schedule(
 
         # Map day numbers to names for display
         day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        
+
         for slot in sorted(unit_schedule.keys()):
             event = unit_schedule[slot]
-            
+
             # Format days
             if event.scheduled_days:
-                days_str = ", ".join(day_names[day] for day in sorted(event.scheduled_days))
+                days_str = ", ".join(
+                    day_names[day] for day in sorted(event.scheduled_days)
+                )
             else:
                 days_str = "None"
-            
+
             # Format active status
             active_str = "✓" if event.active else "✗"
-            
+
             # Format setpoints
-            heat_sp = f"{event.settings.set_point_heat}°F" if event.settings.set_point_heat is not None else "N/A"
-            cool_sp = f"{event.settings.set_point_cool}°F" if event.settings.set_point_cool is not None else "N/A"
-            
+            heat_sp = (
+                f"{event.settings.set_point_heat}°F"
+                if event.settings.set_point_heat is not None
+                else "N/A"
+            )
+            cool_sp = (
+                f"{event.settings.set_point_cool}°F"
+                if event.settings.set_point_cool is not None
+                else "N/A"
+            )
+
             # Format time
-            time_str = event.scheduled_time.strftime("%H:%M") if event.scheduled_time else "N/A"
-            
+            time_str = (
+                event.scheduled_time.strftime("%H:%M")
+                if event.scheduled_time
+                else "N/A"
+            )
+
             table.add_row(
                 slot,
                 active_str,
@@ -684,15 +716,17 @@ def show_schedule(
                 heat_sp,
                 cool_sp,
                 str(event.settings.fan_speed),
-                str(event.settings.vane_dir)
+                str(event.settings.vane_dir),
             )
-        
+
         console.print(table)
-        
+
         # Show summary info
         active_events = sum(1 for slot in unit_schedule if unit_schedule[slot].active)
-        console.print(f"\n[dim]Total slots: {len(unit_schedule)}, Active events: {active_events}[/dim]")
-        
+        console.print(
+            f"\n[dim]Total slots: {len(unit_schedule)}, Active events: {active_events}[/dim]"
+        )
+
     except Exception as e:
         console.print(f"[red]Error retrieving schedule: {e}[/red]")
         raise typer.Exit(1)
@@ -701,10 +735,14 @@ def show_schedule(
 @app.command()
 def check_device_settings(
     device_identifier: Annotated[
-        str, typer.Argument(help="Device serial number or name (or 'all' for all devices)")
+        str,
+        typer.Argument(help="Device serial number or name (or 'all' for all devices)"),
     ] = None,
     exit_code: Annotated[
-        bool, typer.Option("--exit-code", help="Exit with non-zero code if device is out of sync")
+        bool,
+        typer.Option(
+            "--exit-code", help="Exit with non-zero code if device is out of sync"
+        ),
     ] = False,
 ):
     """Check if device settings match their scheduled values. Supports checking all devices with 'all'."""
@@ -716,7 +754,7 @@ def check_device_settings(
         raise typer.Exit(1)
 
     # Handle 'all' devices case
-    if device_identifier and device_identifier.lower() == 'all':
+    if device_identifier and device_identifier.lower() == "all":
         devices_to_check = manager.devices
         console.print(f"[blue]Checking all {len(devices_to_check)} device(s)...[/blue]")
     else:
@@ -736,7 +774,9 @@ def check_device_settings(
             console.print(table)
 
             # Get user selection
-            choice = typer.prompt("Select device by index or enter serial/name (or 'all')")
+            choice = typer.prompt(
+                "Select device by index or enter serial/name (or 'all')"
+            )
 
             # Try to parse as index first
             try:
@@ -751,9 +791,11 @@ def check_device_settings(
                 device_identifier = choice
 
         # Handle single device or 'all' from prompt
-        if device_identifier.lower() == 'all':
+        if device_identifier.lower() == "all":
             devices_to_check = manager.devices
-            console.print(f"[blue]Checking all {len(devices_to_check)} device(s)...[/blue]")
+            console.print(
+                f"[blue]Checking all {len(devices_to_check)} device(s)...[/blue]"
+            )
         else:
             # Find single device
             device = manager.get_device_by_serial(device_identifier)
@@ -763,7 +805,7 @@ def check_device_settings(
             if not device:
                 console.print(f"[red]Device '{device_identifier}' not found.[/red]")
                 raise typer.Exit(1)
-            
+
             devices_to_check = [device]
 
     # Process each device
@@ -777,109 +819,135 @@ def check_device_settings(
     for i, device in enumerate(devices_to_check, 1):
         device_name = device.get_name()
         device_serial = device.get_serial()
-        
+
         if total_devices > 1:
-            console.print(f"\n[bold blue]({i}/{total_devices}) Checking {device_name} ({device_serial})[/bold blue]")
+            console.print(
+                f"\n[bold blue]({i}/{total_devices}) Checking {device_name} ({device_serial})[/bold blue]"
+            )
         else:
-            console.print(f"\n[bold blue]Checking Settings for {device_name} ({device_serial})[/bold blue]")
+            console.print(
+                f"\n[bold blue]Checking Settings for {device_name} ({device_serial})[/bold blue]"
+            )
 
         try:
             # Get current device settings
             current_settings = DeviceSettings.from_device(device)
-            
+
             # Create a schedule-enabled version of the device
             schedule_device = manager.enable_scheduling_for_device(device)
             unit_schedule = schedule_device.get_unit_schedule()
-            
+
             if unit_schedule is None:
-                console.print(f"[yellow]⚠️ Schedule not available for {device_name}. Skipping.[/yellow]")
+                console.print(
+                    f"[yellow]⚠️ Schedule not available for {device_name}. Skipping.[/yellow]"
+                )
                 devices_with_errors += 1
                 continue
-                
+
             unit_schedule.fetch()
-            
+
             # Get expected settings based on schedule
             analyzer = ScheduleAnalyzer()
             expected_settings = analyzer.get_expected_settings(unit_schedule)
-            
+
             if expected_settings is None:
-                console.print(f"[yellow]⚠️ No active schedule found for {device_name}. Skipping.[/yellow]")
+                console.print(
+                    f"[yellow]⚠️ No active schedule found for {device_name}. Skipping.[/yellow]"
+                )
                 devices_with_errors += 1
                 continue
-            
+
             # Compare settings
             differences = current_settings.compare_to(expected_settings, manager.config)
-            
+
             # Separate critical differences (setpoints) from minor ones (mode variations)
             critical_differences = {}
             minor_differences = {}
-            
+
             for field, diff in differences.items():
                 if field in ["heat_setpoint", "cool_setpoint"]:
                     critical_differences[field] = diff
                 else:
                     minor_differences[field] = diff
-            
+
             has_critical_issues = len(critical_differences) > 0
             has_minor_issues = len(minor_differences) > 0
-            
+
             # For single device, show detailed table
             if total_devices == 1:
                 # Create comparison table
-                table = Table(title="Settings Comparison", show_header=True, header_style="bold blue")
+                table = Table(
+                    title="Settings Comparison",
+                    show_header=True,
+                    header_style="bold blue",
+                )
                 table.add_column("Setting", style="cyan", min_width=15)
-                table.add_column("Current", style="yellow", justify="center", min_width=12)
-                table.add_column("Expected", style="green", justify="center", min_width=12)
+                table.add_column(
+                    "Current", style="yellow", justify="center", min_width=12
+                )
+                table.add_column(
+                    "Expected", style="green", justify="center", min_width=12
+                )
                 table.add_column("Status", style="magenta", justify="center")
-                
+
                 # Prioritize setpoints first, then other settings
                 settings_map = {
                     "heat_setpoint": "Heat Setpoint",
-                    "cool_setpoint": "Cool Setpoint", 
+                    "cool_setpoint": "Cool Setpoint",
                     "mode": "Mode",
                     "fan_speed": "Fan Speed",
-                    "vane_direction": "Vane Direction"
+                    "vane_direction": "Vane Direction",
                 }
-                
+
                 for field, display_name in settings_map.items():
                     current_val = getattr(current_settings, field)
                     expected_val = getattr(expected_settings, field)
-                    
+
                     # Format values properly based on field type
                     if field in ["heat_setpoint", "cool_setpoint"]:
-                        current_str = format_temperature(current_val, manager.config.temperature_unit)
-                        expected_str = format_temperature(expected_val, manager.config.temperature_unit)
+                        current_str = format_temperature(
+                            current_val, manager.config.temperature_unit
+                        )
+                        expected_str = format_temperature(
+                            expected_val, manager.config.temperature_unit
+                        )
                     else:
-                        current_str = str(current_val) if current_val is not None else "N/A"
-                        expected_str = str(expected_val) if expected_val is not None else "N/A"
-                    
+                        current_str = (
+                            str(current_val) if current_val is not None else "N/A"
+                        )
+                        expected_str = (
+                            str(expected_val) if expected_val is not None else "N/A"
+                        )
+
                     if field in critical_differences:
                         status = "🔥 CRITICAL"
                         # Highlight critical differences more prominently
                         table.add_row(
-                            f"[bold]{display_name}[/bold]", 
-                            f"[bold red]{current_str}[/bold red]", 
-                            f"[bold green]{expected_str}[/bold green]", 
-                            status
+                            f"[bold]{display_name}[/bold]",
+                            f"[bold red]{current_str}[/bold red]",
+                            f"[bold green]{expected_str}[/bold green]",
+                            status,
                         )
                     elif field in minor_differences:
                         status = "⚠️ MINOR"
                         table.add_row(
-                            display_name, 
-                            f"[yellow]{current_str}[/yellow]", 
-                            f"[green]{expected_str}[/green]", 
-                            status
+                            display_name,
+                            f"[yellow]{current_str}[/yellow]",
+                            f"[green]{expected_str}[/green]",
+                            status,
                         )
                     else:
                         status = "✅ OK"
                         table.add_row(display_name, current_str, expected_str, status)
-                
+
                 console.print(table)
-                
+
                 # Summary for single device
                 now = datetime.datetime.now()
-                console.print(f"\n[dim]Checked at: {now.strftime('%Y-%m-%d %H:%M:%S')}[/dim]")
-            
+                console.print(
+                    f"\n[dim]Checked at: {now.strftime('%Y-%m-%d %H:%M:%S')}[/dim]"
+                )
+
             # Track results for summary
             if not has_critical_issues and not has_minor_issues:
                 console.print(f"[green]✅ {device_name} is in sync![/green]")
@@ -887,27 +955,35 @@ def check_device_settings(
             elif has_critical_issues:
                 devices_with_critical_issues += 1
                 all_exit_status = 1  # Set overall exit status
-                console.print(f"[bold red]🔥 {device_name} has {len(critical_differences)} critical issue(s)![/bold red]")
-                
+                console.print(
+                    f"[bold red]🔥 {device_name} has {len(critical_differences)} critical issue(s)![/bold red]"
+                )
+
                 # Show issues for multi-device or single device detailed view
                 for field, (current, expected) in critical_differences.items():
                     settings_map = {
                         "heat_setpoint": "Heat Setpoint",
-                        "cool_setpoint": "Cool Setpoint", 
+                        "cool_setpoint": "Cool Setpoint",
                         "mode": "Mode",
                         "fan_speed": "Fan Speed",
-                        "vane_direction": "Vane Direction"
+                        "vane_direction": "Vane Direction",
                     }
                     display_name = settings_map[field]
-                    console.print(f"  • {display_name}: [bold red]{current}[/bold red] → [bold green]{expected}[/bold green]")
-                
+                    console.print(
+                        f"  • {display_name}: [bold red]{current}[/bold red] → [bold green]{expected}[/bold green]"
+                    )
+
                 if minor_differences:
-                    console.print(f"  [dim]+ {len(minor_differences)} minor issue(s)[/dim]")
+                    console.print(
+                        f"  [dim]+ {len(minor_differences)} minor issue(s)[/dim]"
+                    )
             else:
                 # Only minor issues
                 devices_with_minor_issues += 1
-                console.print(f"[yellow]⚠️ {device_name} has {len(minor_differences)} minor issue(s) (no critical problems)[/yellow]")
-                
+                console.print(
+                    f"[yellow]⚠️ {device_name} has {len(minor_differences)} minor issue(s) (no critical problems)[/yellow]"
+                )
+
         except Exception as e:
             console.print(f"[red]✗ Error checking {device_name}: {e}[/red]")
             devices_with_errors += 1
@@ -915,24 +991,34 @@ def check_device_settings(
 
     # Summary for multiple devices
     if total_devices > 1:
-        console.print(f"\n[bold blue]Summary:[/bold blue]")
+        console.print("\n[bold blue]Summary:[/bold blue]")
         console.print(f"  • Total devices checked: {total_devices}")
         console.print(f"  • Devices in sync: [green]{devices_in_sync}[/green]")
-        
+
         if devices_with_critical_issues > 0:
-            console.print(f"  • Devices with critical issues: [red]{devices_with_critical_issues}[/red]")
+            console.print(
+                f"  • Devices with critical issues: [red]{devices_with_critical_issues}[/red]"
+            )
         if devices_with_minor_issues > 0:
-            console.print(f"  • Devices with minor issues: [yellow]{devices_with_minor_issues}[/yellow]")
+            console.print(
+                f"  • Devices with minor issues: [yellow]{devices_with_minor_issues}[/yellow]"
+            )
         if devices_with_errors > 0:
             console.print(f"  • Devices with errors: [red]{devices_with_errors}[/red]")
-        
+
         # Overall status
         if devices_with_critical_issues > 0:
-            console.print(f"\n[bold red]🔥 {devices_with_critical_issues} device(s) need immediate attention![/bold red]")
+            console.print(
+                f"\n[bold red]🔥 {devices_with_critical_issues} device(s) need immediate attention![/bold red]"
+            )
         elif devices_with_minor_issues > 0:
-            console.print(f"\n[yellow]⚠️ {devices_with_minor_issues} device(s) have minor issues.[/yellow]")
+            console.print(
+                f"\n[yellow]⚠️ {devices_with_minor_issues} device(s) have minor issues.[/yellow]"
+            )
         else:
-            console.print(f"\n[green]✅ All devices are in sync with their schedules![/green]")
+            console.print(
+                "\n[green]✅ All devices are in sync with their schedules![/green]"
+            )
 
     # Handle exit codes
     if exit_code and all_exit_status != 0:
@@ -947,13 +1033,22 @@ def check_device_settings(
 @app.command()
 def fix_device_settings(
     device_identifier: Annotated[
-        str, typer.Argument(help="Device serial number or name (or 'all' for all devices)")
+        str,
+        typer.Argument(help="Device serial number or name (or 'all' for all devices)"),
     ] = None,
     dry_run: Annotated[
-        bool, typer.Option("--dry-run", "-n", help="Show what would be changed without applying changes")
+        bool,
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="Show what would be changed without applying changes",
+        ),
     ] = False,
     setpoints_only: Annotated[
-        bool, typer.Option("--setpoints-only", help="Only fix temperature setpoints (default behavior)")
+        bool,
+        typer.Option(
+            "--setpoints-only", help="Only fix temperature setpoints (default behavior)"
+        ),
     ] = True,
 ):
     """Fix device settings to match scheduled values. Only adjusts setpoints by default."""
@@ -965,7 +1060,7 @@ def fix_device_settings(
         raise typer.Exit(1)
 
     # Handle 'all' devices case
-    if device_identifier and device_identifier.lower() == 'all':
+    if device_identifier and device_identifier.lower() == "all":
         devices_to_fix = manager.devices
         console.print(f"[blue]Processing all {len(devices_to_fix)} device(s)...[/blue]")
     else:
@@ -985,7 +1080,9 @@ def fix_device_settings(
             console.print(table)
 
             # Get user selection
-            choice = typer.prompt("Select device by index or enter serial/name (or 'all')")
+            choice = typer.prompt(
+                "Select device by index or enter serial/name (or 'all')"
+            )
 
             # Try to parse as index first
             try:
@@ -1000,9 +1097,11 @@ def fix_device_settings(
                 device_identifier = choice
 
         # Handle single device or 'all' from prompt
-        if device_identifier.lower() == 'all':
+        if device_identifier.lower() == "all":
             devices_to_fix = manager.devices
-            console.print(f"[blue]Processing all {len(devices_to_fix)} device(s)...[/blue]")
+            console.print(
+                f"[blue]Processing all {len(devices_to_fix)} device(s)...[/blue]"
+            )
         else:
             # Find single device
             device = manager.get_device_by_serial(device_identifier)
@@ -1012,7 +1111,7 @@ def fix_device_settings(
             if not device:
                 console.print(f"[red]Device '{device_identifier}' not found.[/red]")
                 raise typer.Exit(1)
-            
+
             devices_to_fix = [device]
 
     # Process each device
@@ -1024,43 +1123,52 @@ def fix_device_settings(
     for i, device in enumerate(devices_to_fix, 1):
         device_name = device.get_name()
         device_serial = device.get_serial()
-        
+
         if total_devices > 1:
-            console.print(f"\n[bold blue]({i}/{total_devices}) Processing {device_name} ({device_serial})[/bold blue]")
+            console.print(
+                f"\n[bold blue]({i}/{total_devices}) Processing {device_name} ({device_serial})[/bold blue]"
+            )
         else:
-            console.print(f"\n[bold blue]Processing {device_name} ({device_serial})[/bold blue]")
+            console.print(
+                f"\n[bold blue]Processing {device_name} ({device_serial})[/bold blue]"
+            )
 
         try:
             # Get current device settings
             current_settings = DeviceSettings.from_device(device)
-            
+
             # Create a schedule-enabled version of the device
             schedule_device = manager.enable_scheduling_for_device(device)
             unit_schedule = schedule_device.get_unit_schedule()
-            
+
             if unit_schedule is None:
-                console.print(f"[yellow]⚠️ Schedule not available for {device_name}. Skipping.[/yellow]")
+                console.print(
+                    f"[yellow]⚠️ Schedule not available for {device_name}. Skipping.[/yellow]"
+                )
                 devices_with_errors += 1
                 continue
-                
+
             unit_schedule.fetch()
-            
+
             # Get expected settings based on schedule
             analyzer = ScheduleAnalyzer()
             expected_settings = analyzer.get_expected_settings(unit_schedule)
-            
+
             if expected_settings is None:
-                console.print(f"[yellow]⚠️ No active schedule found for {device_name}. Skipping.[/yellow]")
+                console.print(
+                    f"[yellow]⚠️ No active schedule found for {device_name}. Skipping.[/yellow]"
+                )
                 devices_with_errors += 1
                 continue
-            
+
             # Compare settings
             differences = current_settings.compare_to(expected_settings, manager.config)
-            
+
             # Filter to only setpoints if setpoints_only is True
             if setpoints_only:
                 setpoint_differences = {
-                    field: diff for field, diff in differences.items() 
+                    field: diff
+                    for field, diff in differences.items()
                     if field in ["heat_setpoint", "cool_setpoint"]
                 }
                 differences = setpoint_differences
@@ -1078,22 +1186,28 @@ def fix_device_settings(
                     "cool_setpoint": "Cool Setpoint",
                     "mode": "Mode",
                     "fan_speed": "Fan Speed",
-                    "vane_direction": "Vane Direction"
+                    "vane_direction": "Vane Direction",
                 }[field]
-                console.print(f"  • {field_display}: [red]{current}[/red] → [green]{expected}[/green]")
+                console.print(
+                    f"  • {field_display}: [red]{current}[/red] → [green]{expected}[/green]"
+                )
 
             if dry_run:
-                console.print(f"[dim]🔍 DRY RUN: Would apply {len(differences)} change(s) to {device_name}[/dim]")
+                console.print(
+                    f"[dim]🔍 DRY RUN: Would apply {len(differences)} change(s) to {device_name}[/dim]"
+                )
                 devices_fixed += 1
                 continue
 
             # Apply the changes
-            console.print(f"[blue]Applying {len(differences)} change(s) to {device_name}...[/blue]")
-            
+            console.print(
+                f"[blue]Applying {len(differences)} change(s) to {device_name}...[/blue]"
+            )
+
             changes_applied = 0
             for field in differences.keys():
                 expected_val = getattr(expected_settings, field)
-                
+
                 try:
                     if field == "heat_setpoint" and expected_val is not None:
                         device.set_heat_setpoint(expected_val)
@@ -1101,25 +1215,41 @@ def fix_device_settings(
                     elif field == "cool_setpoint" and expected_val is not None:
                         device.set_cool_setpoint(expected_val)
                         changes_applied += 1
-                    elif field == "mode" and expected_val is not None and not setpoints_only:
+                    elif (
+                        field == "mode"
+                        and expected_val is not None
+                        and not setpoints_only
+                    ):
                         device.set_mode(expected_val)
                         changes_applied += 1
-                    elif field == "fan_speed" and expected_val is not None and not setpoints_only:
+                    elif (
+                        field == "fan_speed"
+                        and expected_val is not None
+                        and not setpoints_only
+                    ):
                         device.set_fan_speed(expected_val)
                         changes_applied += 1
-                    elif field == "vane_direction" and expected_val is not None and not setpoints_only:
+                    elif (
+                        field == "vane_direction"
+                        and expected_val is not None
+                        and not setpoints_only
+                    ):
                         device.set_vane_direction(expected_val)
                         changes_applied += 1
-                        
+
                 except Exception as e:
                     console.print(f"[red]✗ Failed to set {field}: {e}[/red]")
                     continue
 
             if changes_applied > 0:
-                console.print(f"[green]✅ Applied {changes_applied} change(s) to {device_name}[/green]")
+                console.print(
+                    f"[green]✅ Applied {changes_applied} change(s) to {device_name}[/green]"
+                )
                 devices_fixed += 1
             else:
-                console.print(f"[red]✗ No changes could be applied to {device_name}[/red]")
+                console.print(
+                    f"[red]✗ No changes could be applied to {device_name}[/red]"
+                )
                 devices_with_errors += 1
 
         except Exception as e:
@@ -1128,15 +1258,19 @@ def fix_device_settings(
             continue
 
     # Summary
-    console.print(f"\n[bold blue]Summary:[/bold blue]")
-    
+    console.print("\n[bold blue]Summary:[/bold blue]")
+
     if dry_run:
-        console.print(f"[dim]🔍 DRY RUN MODE - No actual changes made[/dim]")
-    
+        console.print("[dim]🔍 DRY RUN MODE - No actual changes made[/dim]")
+
     console.print(f"  • Total devices processed: {total_devices}")
-    console.print(f"  • Devices {'that would be ' if dry_run else ''}fixed: [green]{devices_fixed}[/green]")
-    console.print(f"  • Devices already in sync: [green]{devices_already_synced}[/green]")
-    
+    console.print(
+        f"  • Devices {'that would be ' if dry_run else ''}fixed: [green]{devices_fixed}[/green]"
+    )
+    console.print(
+        f"  • Devices already in sync: [green]{devices_already_synced}[/green]"
+    )
+
     if devices_with_errors > 0:
         console.print(f"  • Devices with errors: [red]{devices_with_errors}[/red]")
 
@@ -1147,7 +1281,9 @@ def fix_device_settings(
         console.print("[yellow]No devices needed fixing.[/yellow]")
         raise typer.Exit(0)
     else:
-        console.print(f"[green]✅ Successfully processed {devices_fixed + devices_already_synced} device(s)![/green]")
+        console.print(
+            f"[green]✅ Successfully processed {devices_fixed + devices_already_synced} device(s)![/green]"
+        )
         raise typer.Exit(0)
 
 
