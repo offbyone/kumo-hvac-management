@@ -68,9 +68,9 @@ check-all:
 fix-all:
     uv run hvac-stability fix-device-settings all --dry-run
 
-# Show version
+# Show version (now uses VCS versioning)
 version:
-    @echo "Version: $(grep '^version' pyproject.toml | cut -d'=' -f2 | tr -d ' \"')"
+    uv run hvac-stability --version
 
 # Development setup - install with dev dependencies
 dev-install:
@@ -80,8 +80,13 @@ dev-install:
 update:
     uv lock --upgrade
 
-# Create a release commit
-release version:
-    @echo "Updating version to {{ version }}"
-    sed -i '' 's/^version = .*/version = "{{ version }}"/' pyproject.toml
-    jj describe -m "Release {{ version }}"
+# Create a git/jj tag for release (VCS versioning will pick this up)
+tag version:
+    @echo "Creating tag v{{ version }}"
+    jj tag v{{ version }}
+    @echo "Version v{{ version }} tagged. Build to get versioned package."
+
+# Show current VCS-derived version
+show-version:
+    @echo "Current version from VCS:"
+    @uv run python -c "from hatchling.metadata.core import ProjectMetadata; print(ProjectMetadata.from_file('pyproject.toml').version)" || echo "Install hatchling-vcs to see version"

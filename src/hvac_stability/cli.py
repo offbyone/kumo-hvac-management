@@ -14,6 +14,22 @@ from pykumo.schedule import UnitSchedule
 from rich.console import Console
 from rich.table import Table
 
+try:
+    from importlib.metadata import version
+except ImportError:
+    # Python < 3.8 fallback
+    from importlib_metadata import version  # type: ignore
+
+def version_callback(value: bool):
+    """Print version and exit."""
+    if value:
+        try:
+            app_version = version("hvac-stability")
+            console.print(f"hvac-stability {app_version}")
+        except Exception:
+            console.print("hvac-stability (version unknown)")
+        raise typer.Exit()
+
 app = typer.Typer()
 console = Console()
 
@@ -1285,6 +1301,16 @@ def fix_device_settings(
             f"[green]✅ Successfully processed {devices_fixed + devices_already_synced} device(s)![/green]"
         )
         raise typer.Exit(0)
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        bool, typer.Option("--version", callback=version_callback, help="Show version and exit")
+    ] = False,
+):
+    """HVAC Stability - Monitor and manage HVAC device settings using the Kumo cloud API."""
+    pass
 
 
 if __name__ == "__main__":

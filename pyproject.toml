@@ -1,7 +1,7 @@
 [project]
 name = "hvac-stability"
-version = "0.1.1"
-description = "Add your description here"
+dynamic = ["version"]
+description = "A Python CLI tool for monitoring and managing HVAC device settings using the Kumo cloud API"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -15,14 +15,22 @@ dependencies = [
 hvac-stability = "hvac_stability.cli:app"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hvac_stability"]
 
+[tool.hatch.version]
+source = "vcs"
+
+# For development without tags, set a fallback
+[tool.hatch.version.raw-options]
+fallback_version = "0.1.0.dev0"
+
 [dependency-groups]
 dev = [
+    "hatchling>=1.27.0",
     "mkdocs>=1.6.1",
     "ruff>=0.12.7",
 ]
