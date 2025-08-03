@@ -51,12 +51,11 @@ jobs:
 
       - name: Generate the docs
         run: uv run mkdocs build
-        working-directory: ./docs
 
       - name: Upload the artifacts
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
-          path: docs/site/
+          path: site/
 
   deploy:
     permissions:
