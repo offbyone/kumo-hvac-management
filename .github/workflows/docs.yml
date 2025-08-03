@@ -9,15 +9,19 @@ on:
       - ".github/workflows/docs.yml"
       - "uv.lock"
       - "CODE_OF_CONDUCT.md"
+      - "README.md"
+      - "mkdocs.yml"
   pull_request:
     branches:
       - "main"
-      - "20*"
+      - "ci*"
     paths:
       - "docs/**/*"
       - ".github/workflows/docs.yml"
       - "uv.lock"
       - "CODE_OF_CONDUCT.md"
+      - "README.md"
+      - "mkdocs.yml"
   workflow_dispatch:
 
 concurrency:

@@ -34,6 +34,11 @@ typecheck:
     @echo "Type checking..."
     -uv run mypy src/ || echo "mypy not available, skipping typecheck"
 
+# Build documentation
+docs:
+    @echo "Building documentation..."
+    uv run mkdocs build
+
 # Run tests (matches CI expectations)
 test:
     @echo "No tests defined yet"
