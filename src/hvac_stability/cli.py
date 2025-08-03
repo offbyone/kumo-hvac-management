@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Annotated
@@ -13,11 +14,28 @@ from environ import config, var
 from pykumo import KumoCloudAccount, PyKumo
 from rich import print
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
 app = typer.Typer()
 console = Console()
+
+
+def configure_pykumo_logging(enable: bool = False):
+    """Configure pykumo logging based on the global flag."""
+    pykumo_logger = logging.getLogger("pykumo")
+
+    if enable:
+        # Enable pykumo logging with INFO level
+        pykumo_logger.setLevel(logging.INFO)
+        if not pykumo_logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter("%(name)s: %(levelname)s - %(message)s")
+            handler.setFormatter(formatter)
+            pykumo_logger.addHandler(handler)
+    else:
+        # Disable pykumo logging by setting to WARNING or higher
+        pykumo_logger.setLevel(logging.ERROR)
 
 
 @config(prefix="KUMO")
@@ -77,6 +95,16 @@ class Config:
         return self.load_stored_credentials()
 
 
+@app.callback()
+def main(
+    pykumo_logging: Annotated[
+        bool, typer.Option("--pykumo-logging", help="Enable pykumo library logging")
+    ] = False,
+):
+    """HVAC Stability Management Tool for Kumo Cloud API."""
+    configure_pykumo_logging(pykumo_logging)
+
+
 app_config = environ.to_config(Config)
 
 
@@ -92,11 +120,14 @@ class HVACManager:
     def create_with_auth(cls, config: Config) -> "HVACManager":
         """Create HVACManager with authentication from stored credentials."""
         username, password = config.get_auth_credentials()
-        
+
         if not username or not password:
-            console.print("✗ No credentials found. Please run 'hvac-stability login' first.", style="bold red")
+            console.print(
+                "✗ No credentials found. Please run 'hvac-stability login' first.",
+                style="bold red",
+            )
             raise typer.Exit(1)
-        
+
         try:
             connection = KumoCloudAccount.Factory(username, password)
             return cls(config=config, connection=connection)
@@ -157,67 +188,117 @@ def login(
         # Test the credentials
         account = KumoCloudAccount.Factory(username, password)
         console.print("✓ Login successful!", style="bold green")
-        
+
         # Store credentials on successful login
         app_config.store_credentials(username, password)
         console.print("✓ Credentials stored securely.", style="green")
-        
+
     except Exception as e:
         console.print(f"✗ Login failed: {e}", style="bold red")
         raise typer.Exit(1)
 
+
 @app.command()
-def list(verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed device information")] = False):
+def list(
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Show detailed device information")
+    ] = False,
+):
     """List all devices."""
     username, password = app_config.get_auth_credentials()
 
     if not username or not password:
-        console.print("✗ No credentials found. Please run 'hvac-stability login' first.", style="bold red")
+        console.print(
+            "✗ No credentials found. Please run 'hvac-stability login' first.",
+            style="bold red",
+        )
         raise typer.Exit(1)
 
     try:
         account = KumoCloudAccount.Factory(username, password)
 
         if verbose:
-            device_details = account.make_pykumos()
-            
+            device_details: dict[str, PyKumo] = account.make_pykumos()
+
             if not device_details:
                 console.print("[yellow]No devices found.[/yellow]")
                 return
-            
-            table = Table(title="HVAC Devices", show_header=True, header_style="bold blue")
+
+            table = Table(
+                title="HVAC Devices - Detailed View", show_header=True, header_style="bold blue"
+            )
+            table.add_column("Name", style="green", min_width=12)
             table.add_column("Serial", style="cyan", no_wrap=True)
-            table.add_column("Label", style="green")
-            table.add_column("Address", style="magenta")
-            table.add_column("Unit Type", style="yellow")
-            table.add_column("MAC", style="dim")
-            
-            for device_serial, device in device_details.items():
-                label = getattr(device, 'label', 'N/A')
-                address = getattr(device, 'address', 'N/A')
-                unit_type = getattr(device, 'unitType', 'N/A')
-                mac = getattr(device, 'mac', 'N/A')
-                
-                table.add_row(
-                    device_serial,
-                    label,
-                    address,
-                    unit_type,
-                    mac
-                )
-            
+            table.add_column("Temperature", style="red", justify="center")
+            table.add_column("Mode", style="yellow", justify="center")
+            table.add_column("Fan Speed", style="blue", justify="center")
+            table.add_column("Status", style="magenta", justify="center")
+            table.add_column("WiFi", style="dim", justify="center")
+
+            for label, device in device_details.items():
+                try:
+                    # Get actual device status information
+                    device_name = device.get_name()
+                    device_serial = device.get_serial()
+                    
+                    # Get current temperature (may need to update status first)
+                    try:
+                        device.update_status()
+                        temp = device.get_current_temperature()
+                        temp_str = f"{temp}°F" if temp is not None else "N/A"
+                    except:
+                        temp_str = "N/A"
+                    
+                    # Get mode and fan speed
+                    try:
+                        mode = device.get_mode() or "N/A"
+                        fan_speed = device.get_fan_speed() or "N/A"
+                        status = device.get_runstate() or "N/A"
+                        wifi_rssi = device.get_wifi_rssi()
+                        wifi_str = f"{wifi_rssi}dBm" if wifi_rssi is not None else "N/A"
+                    except:
+                        mode = fan_speed = status = wifi_str = "N/A"
+
+                    table.add_row(
+                        device_name,
+                        device_serial,
+                        temp_str,
+                        str(mode),
+                        str(fan_speed),
+                        str(status),
+                        wifi_str
+                    )
+                except Exception as e:
+                    # Fallback for devices that fail to provide info
+                    table.add_row(
+                        label,
+                        device.get_serial() if hasattr(device, 'get_serial') else "N/A",
+                        "Error",
+                        "Error",
+                        "Error", 
+                        "Error",
+                        "Error"
+                    )
+
             console.print(table)
         else:
             devices = account.get_indoor_units()
-            
+
             if not devices:
                 console.print("[yellow]No devices found.[/yellow]")
                 return
-                
+
             console.print(f"[green]Found {len(devices)} device(s):[/green]")
             for i, device in enumerate(devices, 1):
-                device_info = f"{i}. {getattr(device, 'get_name', lambda: 'Unknown Device')()}"
-                console.print(f"  {device_info}")
+                # Get device name using the appropriate method
+                if hasattr(device, 'get_name'):
+                    device_name = device.get_name()
+                elif hasattr(device, 'name'):
+                    device_name = device.name
+                else:
+                    device_name = "Unknown Device"
+                    
+                console.print(f"  {i}. {device_name}")
     except Exception as e:
         console.print(f"✗ Error: {e}", style="bold red")
         raise typer.Exit(1)
