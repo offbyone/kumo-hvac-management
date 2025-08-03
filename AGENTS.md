@@ -27,5 +27,6 @@
 
 ## Behaviour
 
-- If changes are outstanding (check with `jj status`) then make sure to describe them before making new changes (use `jj diff` to see the changes, `jj describe` to describe them)
+- If changes are outstanding (check with `jj status`) then make sure to describe them before making new changes (use `jj diff` to see the changes, `jj describe` to describe them). 
+- When starting a new change, make sure to run `jj new`. If there are outstanding changes, `jj commit` will do a describe and new as a single command.
 - make *terse* commits; none of those massive bullet point pull request missive things.

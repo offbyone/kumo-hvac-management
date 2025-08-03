@@ -22,22 +22,32 @@ from rich.table import Table
 app = typer.Typer()
 console = Console()
 
+# Configure logging to suppress debug/info messages
+logging.basicConfig(level=logging.ERROR)
 
-def configure_pykumo_logging(enable: bool = False):
-    """Configure pykumo logging based on the global flag."""
-    pykumo_logger = logging.getLogger("pykumo")
 
-    if enable:
-        # Enable pykumo logging with INFO level
-        pykumo_logger.setLevel(logging.INFO)
-        if not pykumo_logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter("%(name)s: %(levelname)s - %(message)s")
-            handler.setFormatter(formatter)
-            pykumo_logger.addHandler(handler)
+def celsius_to_fahrenheit(celsius: float) -> float:
+    """Convert Celsius to Fahrenheit."""
+    return (celsius * 9/5) + 32
+
+
+def fahrenheit_to_celsius(fahrenheit: float) -> float:
+    """Convert Fahrenheit to Celsius."""
+    return (fahrenheit - 32) * 5/9
+
+
+def format_temperature(temp: float | None, unit: str) -> str:
+    """Format temperature with proper unit and conversion."""
+    if temp is None:
+        return "N/A"
+    
+    if unit.upper() == "F":
+        # PyKumo returns Celsius, convert to Fahrenheit for display
+        temp_display = celsius_to_fahrenheit(temp)
+        return f"{temp_display:.1f}°F"
     else:
-        # Disable pykumo logging by setting to WARNING or higher
-        pykumo_logger.setLevel(logging.ERROR)
+        # Display in Celsius as returned by PyKumo
+        return f"{temp:.1f}°C"
 
 
 @config(prefix="KUMO")
@@ -46,6 +56,7 @@ class Config:
     auth_password: str = var(default=None)
 
     data_path: Path = var(default="~/.local/var/hvac_stability/")
+    temperature_unit: str = var(default="F")  # "F" for Fahrenheit, "C" for Celsius
 
     @property
     def devices_file(self) -> Path:
@@ -97,17 +108,8 @@ class Config:
         return self.load_stored_credentials()
 
 
-@app.callback()
-def main(
-    pykumo_logging: Annotated[
-        bool, typer.Option("--pykumo-logging", help="Enable pykumo library logging")
-    ] = False,
-):
-    """HVAC Stability Management Tool for Kumo Cloud API."""
-    configure_pykumo_logging(pykumo_logging)
-
-
-app_config = environ.to_config(Config)
+# Initialize configuration
+app_config = Config()
 
 
 @define
@@ -142,8 +144,8 @@ class DeviceSettings:
             vane_direction=schedule_settings.vane_dir
         )
 
-    def compare_to(self, other: "DeviceSettings") -> dict[str, tuple[str, str]]:
-        """Compare this settings object to another, returning differences."""
+    def compare_to(self, other: "DeviceSettings", config: "Config" = None) -> dict[str, tuple[str, str]]:
+        """Compare this settings object to another, returning differences with proper formatting."""
         differences = {}
         
         for field in ["mode", "heat_setpoint", "cool_setpoint", "fan_speed", "vane_direction"]:
@@ -159,6 +161,18 @@ class DeviceSettings:
                 if self_normalized != other_normalized:
                     differences[field] = (str(self_val) if self_val is not None else "N/A", 
                                         str(other_val) if other_val is not None else "N/A")
+            elif field in ["heat_setpoint", "cool_setpoint"]:
+                # Format temperature values with proper units
+                if config:
+                    self_str = format_temperature(self_val, config.temperature_unit)
+                    other_str = format_temperature(other_val, config.temperature_unit)
+                else:
+                    # Fallback to raw values if no config provided
+                    self_str = str(self_val) if self_val is not None else "N/A"
+                    other_str = str(other_val) if other_val is not None else "N/A"
+                
+                if self_val != other_val:
+                    differences[field] = (self_str, other_str)
             else:
                 # Handle None values and format for display
                 self_str = str(self_val) if self_val is not None else "N/A"
@@ -224,14 +238,14 @@ class ScheduleAnalyzer:
 
 @define
 class HVACManager:
-    config: Config
+    config: "Config"
     connection: KumoCloudAccount
 
     devices: list[PyKumo] = []
     local_device_config: dict[str, dict] = {}
 
     @classmethod
-    def create_with_auth(cls, config: Config) -> "HVACManager":
+    def create_with_auth(cls, config: "Config") -> "HVACManager":
         """Create HVACManager with authentication from stored credentials."""
         username, password = config.get_auth_credentials()
 
@@ -769,7 +783,7 @@ def check_device_settings(
             return
         
         # Compare settings
-        differences = current_settings.compare_to(expected_settings)
+        differences = current_settings.compare_to(expected_settings, manager.config)
         
         # Separate critical differences (setpoints) from minor ones (mode variations)
         critical_differences = {}
@@ -804,14 +818,13 @@ def check_device_settings(
             current_val = getattr(current_settings, field)
             expected_val = getattr(expected_settings, field)
             
-            current_str = str(current_val) if current_val is not None else "N/A"
-            expected_str = str(expected_val) if expected_val is not None else "N/A"
-            
-            # Add temperature units for setpoints
-            if "setpoint" in field and current_val is not None:
-                current_str += "°F"
-            if "setpoint" in field and expected_val is not None:
-                expected_str += "°F"
+            # Format values properly based on field type
+            if field in ["heat_setpoint", "cool_setpoint"]:
+                current_str = format_temperature(current_val, manager.config.temperature_unit)
+                expected_str = format_temperature(expected_val, manager.config.temperature_unit)
+            else:
+                current_str = str(current_val) if current_val is not None else "N/A"
+                expected_str = str(expected_val) if expected_val is not None else "N/A"
             
             if field in critical_differences:
                 status = "🔥 CRITICAL"
@@ -884,7 +897,210 @@ def check_device_settings(
 
 
 @app.command()
-def reset_device_to_scheduled(name_or_serial: str): ...
+def fix_device_settings(
+    device_identifier: Annotated[
+        str, typer.Argument(help="Device serial number or name (or 'all' for all devices)")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", "-n", help="Show what would be changed without applying changes")
+    ] = False,
+    setpoints_only: Annotated[
+        bool, typer.Option("--setpoints-only", help="Only fix temperature setpoints (default behavior)")
+    ] = True,
+):
+    """Fix device settings to match scheduled values. Only adjusts setpoints by default."""
+    manager = HVACManager.create_with_auth(app_config)
+    manager.load_devices()
+
+    if not manager.devices:
+        console.print("[red]No devices found.[/red]")
+        raise typer.Exit(1)
+
+    # Handle 'all' devices case
+    if device_identifier and device_identifier.lower() == 'all':
+        devices_to_fix = manager.devices
+        console.print(f"[blue]Processing all {len(devices_to_fix)} device(s)...[/blue]")
+    else:
+        # If no device specified, show available devices
+        if not device_identifier:
+            console.print("[yellow]Available devices:[/yellow]")
+            devices = manager.list_devices_simple()
+
+            table = Table(show_header=True, header_style="bold blue")
+            table.add_column("Index", style="cyan", justify="center")
+            table.add_column("Serial", style="green")
+            table.add_column("Name", style="yellow")
+
+            for i, (serial, name) in enumerate(devices, 1):
+                table.add_row(str(i), serial, name)
+
+            console.print(table)
+
+            # Get user selection
+            choice = typer.prompt("Select device by index or enter serial/name (or 'all')")
+
+            # Try to parse as index first
+            try:
+                index = int(choice) - 1
+                if 0 <= index < len(devices):
+                    device_identifier = devices[index][0]  # Use serial
+                else:
+                    console.print("[red]Invalid index.[/red]")
+                    raise typer.Exit(1)
+            except ValueError:
+                # Not an index, use as identifier
+                device_identifier = choice
+
+        # Handle single device or 'all' from prompt
+        if device_identifier.lower() == 'all':
+            devices_to_fix = manager.devices
+            console.print(f"[blue]Processing all {len(devices_to_fix)} device(s)...[/blue]")
+        else:
+            # Find single device
+            device = manager.get_device_by_serial(device_identifier)
+            if not device:
+                device = manager.get_device_by_name(device_identifier)
+
+            if not device:
+                console.print(f"[red]Device '{device_identifier}' not found.[/red]")
+                raise typer.Exit(1)
+            
+            devices_to_fix = [device]
+
+    # Process each device
+    total_devices = len(devices_to_fix)
+    devices_fixed = 0
+    devices_already_synced = 0
+    devices_with_errors = 0
+
+    for i, device in enumerate(devices_to_fix, 1):
+        device_name = device.get_name()
+        device_serial = device.get_serial()
+        
+        if total_devices > 1:
+            console.print(f"\n[bold blue]({i}/{total_devices}) Processing {device_name} ({device_serial})[/bold blue]")
+        else:
+            console.print(f"\n[bold blue]Processing {device_name} ({device_serial})[/bold blue]")
+
+        try:
+            # Get current device settings
+            current_settings = DeviceSettings.from_device(device)
+            
+            # Create a schedule-enabled version of the device
+            schedule_device = manager.enable_scheduling_for_device(device)
+            unit_schedule = schedule_device.get_unit_schedule()
+            
+            if unit_schedule is None:
+                console.print(f"[yellow]⚠️ Schedule not available for {device_name}. Skipping.[/yellow]")
+                devices_with_errors += 1
+                continue
+                
+            unit_schedule.fetch()
+            
+            # Get expected settings based on schedule
+            analyzer = ScheduleAnalyzer()
+            expected_settings = analyzer.get_expected_settings(unit_schedule)
+            
+            if expected_settings is None:
+                console.print(f"[yellow]⚠️ No active schedule found for {device_name}. Skipping.[/yellow]")
+                devices_with_errors += 1
+                continue
+            
+            # Compare settings
+            differences = current_settings.compare_to(expected_settings, manager.config)
+            
+            # Filter to only setpoints if setpoints_only is True
+            if setpoints_only:
+                setpoint_differences = {
+                    field: diff for field, diff in differences.items() 
+                    if field in ["heat_setpoint", "cool_setpoint"]
+                }
+                differences = setpoint_differences
+
+            if not differences:
+                console.print(f"[green]✅ {device_name} is already in sync![/green]")
+                devices_already_synced += 1
+                continue
+
+            # Show what will be changed
+            console.print(f"[yellow]Changes needed for {device_name}:[/yellow]")
+            for field, (current, expected) in differences.items():
+                field_display = {
+                    "heat_setpoint": "Heat Setpoint",
+                    "cool_setpoint": "Cool Setpoint",
+                    "mode": "Mode",
+                    "fan_speed": "Fan Speed",
+                    "vane_direction": "Vane Direction"
+                }[field]
+                console.print(f"  • {field_display}: [red]{current}[/red] → [green]{expected}[/green]")
+
+            if dry_run:
+                console.print(f"[dim]🔍 DRY RUN: Would apply {len(differences)} change(s) to {device_name}[/dim]")
+                devices_fixed += 1
+                continue
+
+            # Apply the changes
+            console.print(f"[blue]Applying {len(differences)} change(s) to {device_name}...[/blue]")
+            
+            changes_applied = 0
+            for field in differences.keys():
+                expected_val = getattr(expected_settings, field)
+                
+                try:
+                    if field == "heat_setpoint" and expected_val is not None:
+                        device.set_heat_setpoint(expected_val)
+                        changes_applied += 1
+                    elif field == "cool_setpoint" and expected_val is not None:
+                        device.set_cool_setpoint(expected_val)
+                        changes_applied += 1
+                    elif field == "mode" and expected_val is not None and not setpoints_only:
+                        device.set_mode(expected_val)
+                        changes_applied += 1
+                    elif field == "fan_speed" and expected_val is not None and not setpoints_only:
+                        device.set_fan_speed(expected_val)
+                        changes_applied += 1
+                    elif field == "vane_direction" and expected_val is not None and not setpoints_only:
+                        device.set_vane_direction(expected_val)
+                        changes_applied += 1
+                        
+                except Exception as e:
+                    console.print(f"[red]✗ Failed to set {field}: {e}[/red]")
+                    continue
+
+            if changes_applied > 0:
+                console.print(f"[green]✅ Applied {changes_applied} change(s) to {device_name}[/green]")
+                devices_fixed += 1
+            else:
+                console.print(f"[red]✗ No changes could be applied to {device_name}[/red]")
+                devices_with_errors += 1
+
+        except Exception as e:
+            console.print(f"[red]✗ Error processing {device_name}: {e}[/red]")
+            devices_with_errors += 1
+            continue
+
+    # Summary
+    console.print(f"\n[bold blue]Summary:[/bold blue]")
+    
+    if dry_run:
+        console.print(f"[dim]🔍 DRY RUN MODE - No actual changes made[/dim]")
+    
+    console.print(f"  • Total devices processed: {total_devices}")
+    console.print(f"  • Devices {'that would be ' if dry_run else ''}fixed: [green]{devices_fixed}[/green]")
+    console.print(f"  • Devices already in sync: [green]{devices_already_synced}[/green]")
+    
+    if devices_with_errors > 0:
+        console.print(f"  • Devices with errors: [red]{devices_with_errors}[/red]")
+
+    # Exit with appropriate code
+    if devices_with_errors > 0:
+        raise typer.Exit(1)
+    elif devices_fixed == 0 and devices_already_synced == 0:
+        console.print("[yellow]No devices needed fixing.[/yellow]")
+        raise typer.Exit(0)
+    else:
+        console.print(f"[green]✅ Successfully processed {devices_fixed + devices_already_synced} device(s)![/green]")
+        raise typer.Exit(0)
 
 
 if __name__ == "__main__":
