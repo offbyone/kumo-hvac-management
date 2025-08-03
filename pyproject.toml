@@ -20,3 +20,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hvac_stability"]
+
+[dependency-groups]
+dev = [
+    "mkdocs>=1.6.1",
+    "ruff>=0.12.7",
+]
