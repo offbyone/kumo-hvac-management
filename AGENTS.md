@@ -24,3 +24,8 @@
 - This is a Python CLI tool for HVAC device management using the Kumo cloud API
 - Uses jujutsu (jj) for version control - commit changes with `jj commit -m "message"`
 - .venv/ contains all the local copies of the dependencies; use that when determining what a library is capable of.
+
+## Behaviour
+
+- If changes are outstanding (check with `jj status`) then make sure to describe them before making new changes (use `jj diff` to see the changes, `jj describe` to describe them)
+- make *terse* commits; none of those massive bullet point pull request missive things.
