@@ -12,8 +12,12 @@ from click import secho
 from environ import config, var
 from pykumo import KumoCloudAccount, PyKumo
 from rich import print
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
 
 app = typer.Typer()
+console = Console()
 
 
 @config(prefix="KUMO")
@@ -26,7 +30,7 @@ class Config:
     @property
     def devices_file(self) -> Path:
         return Path(self.data_path).expanduser() / "devices.json"
-    
+
     @property
     def credentials_file(self) -> Path:
         return Path(self.data_path).expanduser() / ".credentials"
@@ -88,12 +92,16 @@ class HVACManager:
     def create_with_auth(cls, config: Config) -> "HVACManager":
         """Create HVACManager with authentication from stored credentials."""
         username, password = config.get_auth_credentials()
-
+        
         if not username or not password:
-            secho(
-                "No credentials found. Please run 'hvac-stability login' first.",
-                fg="red",
-            )
+            console.print("✗ No credentials found. Please run 'hvac-stability login' first.", style="bold red")
+            raise typer.Exit(1)
+        
+        try:
+            connection = KumoCloudAccount.Factory(username, password)
+            return cls(config=config, connection=connection)
+        except Exception as e:
+            console.print(f"✗ Authentication failed: {e}", style="bold red")
             raise typer.Exit(1)
 
         try:
@@ -148,16 +156,15 @@ def login(
     try:
         # Test the credentials
         account = KumoCloudAccount.Factory(username, password)
-        secho("Login successful!", fg="green")
-
+        console.print("✓ Login successful!", style="bold green")
+        
         # Store credentials on successful login
         app_config.store_credentials(username, password)
-        secho("Credentials stored securely.", fg="green")
-
+        console.print("✓ Credentials stored securely.", style="green")
+        
     except Exception as e:
-        secho(f"Login failed: {e}", fg="red")
+        console.print(f"✗ Login failed: {e}", style="bold red")
         raise typer.Exit(1)
-
 
 @app.command()
 def list(verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed device information")] = False):
@@ -165,9 +172,7 @@ def list(verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show det
     username, password = app_config.get_auth_credentials()
 
     if not username or not password:
-        secho(
-            "No credentials found. Please run 'hvac-stability login' first.", fg="red"
-        )
+        console.print("✗ No credentials found. Please run 'hvac-stability login' first.", style="bold red")
         raise typer.Exit(1)
 
     try:
@@ -175,19 +180,46 @@ def list(verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show det
 
         if verbose:
             device_details = account.make_pykumos()
+            
+            if not device_details:
+                console.print("[yellow]No devices found.[/yellow]")
+                return
+            
+            table = Table(title="HVAC Devices", show_header=True, header_style="bold blue")
+            table.add_column("Serial", style="cyan", no_wrap=True)
+            table.add_column("Label", style="green")
+            table.add_column("Address", style="magenta")
+            table.add_column("Unit Type", style="yellow")
+            table.add_column("MAC", style="dim")
+            
             for device_serial, device in device_details.items():
-                print(f"\n[bold blue]Device: {device_serial}[/bold blue]")
-                print(f"  Label: {getattr(device, 'label', 'N/A')}")
-                print(f"  Address: {getattr(device, 'address', 'N/A')}")
-                print(f"  Password: {getattr(device, 'password', 'N/A')}")
-                print(f"  Crypto Serial: {getattr(device, 'cryptoSerial', 'N/A')}")
-                print(f"  MAC: {getattr(device, 'mac', 'N/A')}")
-                print(f"  Unit Type: {getattr(device, 'unitType', 'N/A')}")
+                label = getattr(device, 'label', 'N/A')
+                address = getattr(device, 'address', 'N/A')
+                unit_type = getattr(device, 'unitType', 'N/A')
+                mac = getattr(device, 'mac', 'N/A')
+                
+                table.add_row(
+                    device_serial,
+                    label,
+                    address,
+                    unit_type,
+                    mac
+                )
+            
+            console.print(table)
         else:
             devices = account.get_indoor_units()
-            print(devices)
+            
+            if not devices:
+                console.print("[yellow]No devices found.[/yellow]")
+                return
+                
+            console.print(f"[green]Found {len(devices)} device(s):[/green]")
+            for i, device in enumerate(devices, 1):
+                device_info = f"{i}. {getattr(device, 'get_name', lambda: 'Unknown Device')()}"
+                console.print(f"  {device_info}")
     except Exception as e:
-        secho(f"Error: {e}", fg="red")
+        console.print(f"✗ Error: {e}", style="bold red")
         raise typer.Exit(1)
 
 
