@@ -36,11 +36,11 @@ class Config:
         creds_file = self.credentials_file
         if not creds_file.exists():
             return None, None
-        
+
         try:
             with open(creds_file, "r") as f:
                 encoded_data = f.read().strip()
-            
+
             decoded_data = base64.b64decode(encoded_data).decode("utf-8")
             creds = json.loads(decoded_data)
             return creds.get("username"), creds.get("password")
@@ -51,13 +51,15 @@ class Config:
         """Store credentials securely in the credentials file."""
         creds_file = self.credentials_file
         creds_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         creds_data = {"username": username, "password": password}
-        encoded_data = base64.b64encode(json.dumps(creds_data).encode("utf-8")).decode("utf-8")
-        
+        encoded_data = base64.b64encode(json.dumps(creds_data).encode("utf-8")).decode(
+            "utf-8"
+        )
+
         with open(creds_file, "w") as f:
             f.write(encoded_data)
-        
+
         # Set restrictive permissions (owner read/write only)
         os.chmod(creds_file, 0o600)
 
@@ -66,7 +68,7 @@ class Config:
         # First try environment variables
         if self.auth_username and self.auth_password:
             return self.auth_username, self.auth_password
-        
+
         # Fall back to stored credentials
         return self.load_stored_credentials()
 
@@ -86,11 +88,14 @@ class HVACManager:
     def create_with_auth(cls, config: Config) -> "HVACManager":
         """Create HVACManager with authentication from stored credentials."""
         username, password = config.get_auth_credentials()
-        
+
         if not username or not password:
-            secho("No credentials found. Please run 'hvac-stability login' first.", fg="red")
+            secho(
+                "No credentials found. Please run 'hvac-stability login' first.",
+                fg="red",
+            )
             raise typer.Exit(1)
-        
+
         try:
             connection = KumoCloudAccount.Factory(username, password)
             return cls(config=config, connection=connection)
@@ -119,22 +124,24 @@ class HVACManager:
 @app.command()
 def login(
     username: Annotated[str, typer.Argument()] = None,
-    password: Annotated[str, typer.Option("--password", "-p", prompt=True, hide_input=True)] = None,
+    password: Annotated[
+        str, typer.Option("--password", "-p", prompt=True, hide_input=True)
+    ] = None,
 ):
     """Login to the Kumo API and store credentials securely."""
     # Get username from argument, stored creds, or environment
     if not username:
         stored_username, _ = app_config.load_stored_credentials()
         username = username or stored_username or app_config.auth_username
-    
+
     if not username:
         username = typer.prompt("Username")
-    
+
     # Get password from option, stored creds, or environment
     if not password:
         _, stored_password = app_config.load_stored_credentials()
         password = password or stored_password or app_config.auth_password
-    
+
     if not password:
         password = typer.prompt("Password", hide_input=True)
 
@@ -142,29 +149,43 @@ def login(
         # Test the credentials
         account = KumoCloudAccount.Factory(username, password)
         secho("Login successful!", fg="green")
-        
+
         # Store credentials on successful login
         app_config.store_credentials(username, password)
         secho("Credentials stored securely.", fg="green")
-        
+
     except Exception as e:
         secho(f"Login failed: {e}", fg="red")
         raise typer.Exit(1)
 
 
 @app.command()
-def list():
+def list(verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed device information")] = False):
     """List all devices."""
     username, password = app_config.get_auth_credentials()
-    
+
     if not username or not password:
-        secho("No credentials found. Please run 'hvac-stability login' first.", fg="red")
+        secho(
+            "No credentials found. Please run 'hvac-stability login' first.", fg="red"
+        )
         raise typer.Exit(1)
 
     try:
         account = KumoCloudAccount.Factory(username, password)
-        devices = account.get_indoor_units()
-        print(devices)
+
+        if verbose:
+            device_details = account.make_pykumos()
+            for device_serial, device in device_details.items():
+                print(f"\n[bold blue]Device: {device_serial}[/bold blue]")
+                print(f"  Label: {getattr(device, 'label', 'N/A')}")
+                print(f"  Address: {getattr(device, 'address', 'N/A')}")
+                print(f"  Password: {getattr(device, 'password', 'N/A')}")
+                print(f"  Crypto Serial: {getattr(device, 'cryptoSerial', 'N/A')}")
+                print(f"  MAC: {getattr(device, 'mac', 'N/A')}")
+                print(f"  Unit Type: {getattr(device, 'unitType', 'N/A')}")
+        else:
+            devices = account.get_indoor_units()
+            print(devices)
     except Exception as e:
         secho(f"Error: {e}", fg="red")
         raise typer.Exit(1)
